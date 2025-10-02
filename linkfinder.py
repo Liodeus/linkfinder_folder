@@ -101,36 +101,92 @@ def rebuild_paths(base_url, js_dir_url, relative_path):
     """Generate all possible URLs by progressively trimming directory levels"""
     urls = []
     
-    # Clean up the relative path (remove ./ prefix)
+    # Clean up the base_url and js_dir_url
+    base_url_normalized = base_url.rstrip('/')
+    
+    # Handle absolute paths (starting with /)
+    if relative_path.startswith('/'):
+        # For absolute paths, just append to base domain
+        parsed = urlparse(base_url_normalized)
+        domain = f"{parsed.scheme}://{parsed.netloc}"
+        full_url = domain + relative_path
+        urls.append(full_url)
+        return urls
+    
+    # Handle ../ paths - count how many levels to go up
     clean_path = relative_path
+    levels_up = 0
+    
+    while clean_path.startswith('../'):
+        levels_up += 1
+        clean_path = clean_path[3:]  # Remove '../'
+    
+    # Handle ./ prefix
     if clean_path.startswith('./'):
         clean_path = clean_path[2:]
     elif clean_path.startswith('.'):
         clean_path = clean_path[1:]
     
-    # Start from the JS file directory and work backwards
-    current_url = js_dir_url
+    # Start from js_dir_url and go up the required levels
+    current_url = js_dir_url.rstrip('/')
     
+    # Go up directories for ../ references
+    for _ in range(levels_up):
+        last_slash = current_url.rfind('/')
+        if last_slash == -1 or not current_url[:last_slash].startswith(base_url_normalized):
+            break
+        current_url = current_url[:last_slash]
+    
+    # Now generate all possible URLs from this starting point down to base
     while True:
         # Combine current directory URL with the clean path
-        if current_url.endswith('/'):
-            full_url = current_url + clean_path
-        else:
-            full_url = current_url + '/' + clean_path
-        
+        full_url = current_url + '/' + clean_path
         urls.append(full_url)
         
+        # Check if we've reached the base URL
+        if current_url == base_url_normalized:
+            break
+        
         # Remove the last directory level
-        if current_url.rstrip('/') == base_url.rstrip('/'):
-            break
-            
-        current_url = current_url.rstrip('/')
         last_slash = current_url.rfind('/')
-        if last_slash == -1 or current_url[:last_slash+1] == base_url:
+        if last_slash == -1:
             break
-        current_url = current_url[:last_slash+1]
+        
+        current_url = current_url[:last_slash]
+        
+        # Don't go above the base URL
+        if not current_url.startswith(base_url_normalized):
+            break
     
     return urls
+
+
+def write_path_rebuild_file(results, output_dir="."):
+    """Write path rebuild file with reconstructed URLs"""
+    rebuild_file = os.path.join(output_dir, "new_path_rebuild")
+    
+    try:
+        with open(rebuild_file, 'w', encoding='utf-8') as f:
+            for js_file, paths in results.items():
+                # Extract base URL from JS file path
+                base_url, js_dir_url = extract_base_url_from_path(js_file)
+                
+                if not base_url:
+                    continue
+                
+                for path in paths:
+                    # Process paths that start with "." or "/"
+                    if path.startswith('.') or path.startswith('/'):
+                        # Remove spaces from the path
+                        clean_path = path.replace(' ', '')
+                        
+                        rebuilt_urls = rebuild_paths(base_url, js_dir_url, clean_path)
+                        for url in rebuilt_urls:
+                            f.write(f"{url}\n")
+        
+        print(f"{Colors.GREEN}Path rebuild file saved to: {rebuild_file}{Colors.RESET}")
+    except Exception as e:
+        print(f"{Colors.RED}Error writing rebuild file: {e}{Colors.RESET}")
 
 
 def is_mime_type(text):
@@ -221,39 +277,6 @@ def write_output_file(results, output_file):
     except Exception as e:
         print(f"{Colors.RED}Error writing output file: {e}{Colors.RESET}")
 
-
-def write_path_rebuild_file(results, output_dir="."):
-    """Write path rebuild file with reconstructed URLs"""
-    rebuild_file = os.path.join(output_dir, "new_path_rebuild")
-    
-    try:
-        with open(rebuild_file, 'w', encoding='utf-8') as f:
-            for js_file, paths in results.items():
-                # Extract base URL from JS file path
-                base_url, js_dir_url = extract_base_url_from_path(js_file)
-                
-                if not base_url:
-                    continue
-                
-                for path in paths:
-                    # Only process relative paths that start with "."
-                    if path.startswith('.'):
-                        # Remove spaces from the path
-                        clean_path = path.replace(' ', '')
-                        
-                        # Remove relative path prefixes
-                        if clean_path.startswith('./'):
-                            clean_path = clean_path[2:]  # Remove "./"
-                        elif clean_path.startswith('../'):
-                            clean_path = clean_path[3:]  # Remove "../"
-                        elif clean_path.startswith('.'):
-                            clean_path = clean_path[1:]  # Remove "."
-                        
-                        rebuilt_urls = rebuild_paths(base_url, js_dir_url, clean_path)
-                        for url in rebuilt_urls:
-                            f.write(f"{url}\n")
-    except Exception as e:
-        print(f"{Colors.RED}Error writing rebuild file: {e}{Colors.RESET}")
 
 def main():
     parser = argparse.ArgumentParser(
